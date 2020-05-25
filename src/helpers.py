@@ -1,10 +1,39 @@
 import pika
 from random import choice
 # import aiogram
+from contextlib import contextmanager
+import sqlalchemy as sa
+from sqlalchemy.orm import sessionmaker
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
+from walld_db.models import get_psql_dsn, User
 # ЭТОТ УЖАС НУЖНО ПЕРЕПИСАТЬ НА КЛАСС
 # TODO ATEXIT STUFF
+
+class DB:
+    def __init__(self, db_user, db_passwd, db_host, db_port, db_name):
+        dsn = get_psql_dsn(db_user, db_passwd, db_host, db_port, db_name)
+        self.engine = self.get_engine(dsn)
+        self.session_maker = sessionmaker(bind=self.engine)
+
+    @staticmethod
+    def get_engine(dsn):
+        return sa.create_engine(dsn)
+
+    @contextmanager
+    def get_connection(self):
+        with self.engine.connect() as connection:
+            yield connection
+
+    @contextmanager
+    def get_session(self):
+        session = self.session_maker()
+        try:
+            yield session
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            session.close()
 
 
 class Rmq:
@@ -43,8 +72,6 @@ def gen_answers(answer:bool) -> str:
         ll = ["Так не пойдет", "Неа"]
         emo = ["❌", '👎']
     return f'{choice(ll)} - {choice(emo)}' # nosec
-
-
 
 def gen_markup():
     markup = InlineKeyboardMarkup()
