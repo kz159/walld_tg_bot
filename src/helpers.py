@@ -1,12 +1,14 @@
 from contextlib import contextmanager
 from random import choice
+from time import sleep
 
-from telebot import types
 import pika
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
+from telebot import types
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
-from walld_db.models import User, get_psql_dsn, Picture, Category, SubCategory, Tag
+from walld_db.models import (Category, SubCategory, Tag, User,
+                             get_psql_dsn, Moderator)
 
 # TODO ATEXIT STUFF
 
@@ -30,8 +32,8 @@ class DB:
         session = self.session_maker(expire_on_commit=expire)
         try:
             yield session
-        #except:
-        #    session.rollback()
+        except:
+            session.rollback()
         finally:
             if commit:
                 session.commit()
@@ -65,8 +67,19 @@ class DB:
 
     def get_state(self, tg_id, table): # TODO add sessions
         with self.get_session(commit=False) as ses:
-            l = ses.query(User, table.tg_state).filter_by(telegram_id=tg_id)
-            return l.one_or_none()[1]
+            l = ses.query(User, table.tg_state).\
+                join(table, User.user_id == table.user_id).\
+                filter(User.telegram_id == tg_id)
+            l = l.one_or_none()
+            if l:
+                return l[1]
+            return l
+
+    def get_moderator(self, tg_id, session=None):
+        l = session.query(User, Moderator).\
+            join(Moderator, User.user_id == Moderator.user_id).\
+            filter(User.telegram_id==tg_id).one()
+        return l
 
     def get_sub_categories(self, category) -> list:
         with self.get_session(commit=False) as ses:
@@ -84,12 +97,18 @@ class Rmq:
                  host='localhost',
                  port='5672',
                  user="guest",
-                 password='guest'):
-        self.creds = pika.PlainCredentials(user, password)
+                 passw='guest'):
+        self.creds = pika.PlainCredentials(user, passw)
         self.params = pika.ConnectionParameters(host=host,
                                                 port=port,
                                                 credentials=self.creds)
-        self.connection = pika.BlockingConnection()
+        while True:
+            try:
+                self.connection = pika.BlockingConnection()
+                break
+            except pika.exceptions.AMQPConnectionError:
+                sleep(3)
+                continue
         self.channel = self.connection.channel()
         self.channel.queue_declare(queue='check_out', durable=True)
         self.channel.queue_declare(queue='go_sql', durable=True)
