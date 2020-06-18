@@ -6,14 +6,14 @@ from threading import Thread
 from time import sleep
 
 import telebot
+from walld_db.helpers import (DB, Rmq, gen_inline_markup, gen_markup,
+                              prepare_json_review)
 from walld_db.models import (Admin, AdminStates, Category, Moderator,
-                             ModStates, SubCategory, Tag, User)
+                             ModStates, SubCategory, Tag, User, RejectedPicture)
 
 from config import (DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER, RMQ_HOST,
                     RMQ_PASS, RMQ_PORT, RMQ_USER, TG_TOKEN)
-from helpers import DB, Rmq, gen_inline_markup, gen_markup, prepare_json_review
 from meta import Answers
-from sqlalchemy.orm import joinedload
 
 #logging.basicConfig(level=logging.INFO)
 
@@ -25,23 +25,30 @@ rmq = Rmq(host=RMQ_HOST,
           user=RMQ_USER,
           passw=RMQ_PASS)
 
-db = DB(db_user=DB_USER,
-        db_passwd=DB_PASSWORD,
-        db_host=DB_HOST,
-        db_port=DB_PORT,
-        db_name=DB_NAME)
+db = DB(user=DB_USER,
+        passwd=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+        name=DB_NAME)
 
 @bot.message_handler(commands=['start'])
 def pass_start(m):
+    '''
+    this is a stealth bot, we need to ignore start
+    '''
     pass
 
 @bot.message_handler(commands=['reset'])
 def reset_user(message):
+    '''
+    Reset mod state to available
+    '''
     with db.get_session() as ses:
         user = ses.query(User, Moderator).join(Moderator).\
                filter(User.telegram_id == message.chat.id).one()
 
         user.Moderator.tg_state = ModStates.available
+    bot.send_message(message.chat.id, 'ok!')
 
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -52,9 +59,15 @@ def do_stuff(call):
     По сути 2 шаг по обработке картинки
     """
     with db.get_session() as ses:
-        dude = ses.query(User, Moderator).filter(Moderator.user_id == User.user_id,
-                                                 User.telegram_id == call.from_user.id)
-        dude = dude.one()
+        dude = ses.query(User, Moderator).\
+               filter(Moderator.user_id == User.user_id,
+                      User.telegram_id == call.from_user.id)
+        dude = dude.one_or_none()
+        if not dude:
+            return
+
+        pic_json = dude.Moderator.json_review
+        last_message = dude.Moderator.last_message
 
         if (call.data == 'cb_yes' or call.data == 'done_no'):
             dude.Moderator.tg_state = ModStates.choosing_category
@@ -62,27 +75,35 @@ def do_stuff(call):
             categories = db.categories
             categories.append('Добавить новую...')
             bot.edit_message_reply_markup(dude.User.telegram_id,
-                                          message_id=dude.Moderator.last_message)
+                                          message_id=last_message)
             bot.send_message(call.from_user.id,
                              'Категория!',
                              reply_markup=gen_markup(categories))
 
         elif call.data == 'cb_no':
             bot.edit_message_reply_markup(dude.User.telegram_id,
-                                        message_id=dude.Moderator.last_message)
+                                          message_id=last_message)
             bot.answer_callback_query(call.id, "Забываем про пикчу")
             dude.Moderator.tg_state = ModStates.available
-            # TODO make rejected pictures table
+
+            rejected_pic = RejectedPicture(mod_id=dude.Moderator.mod_id,
+                                           uploader='Pexels crawler',
+                                           url=pic_json['download_url'])
+            ses.add(rejected_pic)
 
         elif call.data == 'done_yes':
             bot.edit_message_reply_markup(dude.User.telegram_id,
-                                          message_id=dude.Moderator.last_message)
+                                          message_id=last_message)
             bot.answer_callback_query(call.id, "Спасибо! Бросил на обработку")
             dude.Moderator.pics_accepted += 1
-            dude.Moderator.json_review['mod_review_id'] = dude.User.user_id
-            # TODO StreamLostError indicated EOF
-            rmq.send_message(str(dude.Moderator.json_review))
-            bot.send_message(call.from_user.id, 'ok', reply_markup=gen_markup())
+            pic_json['mod_review_id'] = dude.User.user_id
+            rmq.channel.basic_publish(exchange='',
+                                      routing_key='go_sql',
+                                      properties=rmq.durable,
+                                      body=json.dumps(pic_json))
+            bot.send_message(call.from_user.id,
+                             'ok',
+                             reply_markup=gen_markup())
             dude.Moderator.tg_state = ModStates.available
 
 @bot.message_handler(commands=['reg'])
@@ -117,8 +138,9 @@ def raise_user(message):
     выдаем клавиатуру со всеми известными юзерами
     """
     with db.get_session() as ses:
-        dude = ses.query(User, Admin).filter(User.telegram_id == message.chat.id,
-                                             User.user_id==Admin.user_id).one_or_none()
+        dude = ses.query(User, Admin).\
+               filter(User.telegram_id == message.chat.id,
+                      User.user_id == Admin.user_id).one()
         if dude:
             dudes = db.users
             bot.send_message(message.chat.id,
@@ -132,13 +154,14 @@ def raise_user_step_two(message):
     Обработка второго шага повышение привелегий юзера
     """
     with db.get_session() as ses:
-        user = ses.query(User).filter_by(nickname=message.text).one_or_none()
+        user = ses.query(User).filter_by(nickname=message.text).one()
         if user:
             ses.add(Moderator(user_id=user.user_id))
             bot.send_message(message.chat.id, Answers.ok)
         else:
             bot.send_message(message.chat.id, 'not found user')
-        admin = ses.query(User, Admin).filter_by(telegram_id=message.chat.id).one()
+        admin = ses.query(User, Admin).\
+                filter_by(telegram_id=message.chat.id).one()
         admin.Admin.tg_state = AdminStates.available
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.choosing_category)
@@ -148,12 +171,12 @@ def apply_category(message):
     выдаем 3 стадию если нет необходимой категории
     выдаем 4 стадию если желаемая категория существует
     """
-    with db.get_session() as ses: 
+    with db.get_session() as ses:
         # TODO Очень много with session,
         # мб есть прикол чтоб запихнуть это в декоратор?
         user = ses.query(User, Moderator).\
                join(Moderator, User.user_id == Moderator.user_id).\
-               filter(User.telegram_id==message.chat.id).one()
+               filter(User.telegram_id == message.chat.id).one()
         if message.text in db.categories:
             user.Moderator.json_review['category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_sub_category
@@ -188,7 +211,7 @@ def apply_sub_category(message):
         if message.text in db.get_sub_categories(cat):
             user.Moderator.json_review['sub_category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_tags
-            tags = db.tags
+            tags = db.named_tags
             tags.append(Answers.add_new)
             tags.append(Answers.ok)
             bot.send_message(message.chat.id,
@@ -215,19 +238,20 @@ def choose_tag(message):
 
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
+        tag = db.get_tag(tag_name=message.text, session=ses)
 
         if not user.Moderator.json_review.get('tags'):
             user.Moderator.json_review['tags'] = []
         pic_tags = user.Moderator.json_review['tags']
-        if (message.text in db.tags and message.text not in pic_tags):
-            pic_tags.append(message.text)
-            user.Moderator.json_review['tags'] = pic_tags
-            bot.send_message(message.chat.id, Answers.ok)
 
-        elif message.text in pic_tags:
-            pic_tags.remove(message.text)
-            user.Moderator.json_review['tags'] = pic_tags
-            bot.send_message(message.chat.id, Answers.deleted)
+        if message.text == Answers.ok:
+            body = prepare_json_review(user.Moderator.json_review)
+            r_markup = gen_inline_markup(cb_yes='done_yes',
+                                         cb_no='done_no')
+            review = bot.send_message(message.chat.id,
+                                      body,
+                                      reply_markup=r_markup)
+            user.Moderator.last_message = review.message_id
 
         elif message.text == Answers.add_new:
             bot.send_message(message.chat.id,
@@ -235,12 +259,18 @@ def choose_tag(message):
                              reply_markup=gen_markup())
             user.Moderator.tg_state = ModStates.making_tags
 
-        elif message.text == Answers.ok:
-            review = bot.send_message(message.chat.id,
-                                      prepare_json_review(user.Moderator.json_review),
-                                      reply_markup=gen_inline_markup(cb_yes='done_yes',
-                                                                     cb_no='done_no'))
-            user.Moderator.last_message = review.message_id
+        elif (message.text in db.named_tags and tag.tag_name not in pic_tags):
+            pic_tags.append(tag.tag_name)
+            user.Moderator.json_review['tags'] = pic_tags
+            bot.send_message(message.chat.id, Answers.ok)
+
+        elif tag is not None and tag.tag_name in pic_tags:
+            pic_tags.remove(tag.tag_name)
+            user.Moderator.json_review['tags'] = pic_tags
+            bot.send_message(message.chat.id, Answers.deleted)
+
+        else:
+            bot.send_message(message.chat.id, 'Ты подбираешь тэги, если что')
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_tags)
 def create_tag(message):
@@ -251,7 +281,7 @@ def create_tag(message):
         ses.add(Tag(tag_name=message.text))
         user = db.get_moderator(message.chat.id, session=ses)
         user.Moderator.tg_state = ModStates.choosing_tags
-    tags = db.tags
+    tags = db.named_tags
     tags.append(Answers.add_new)
     tags.append(Answers.ok)
     bot.send_message(user.User.telegram_id,
@@ -260,21 +290,24 @@ def create_tag(message):
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_sub_category)
 def create_sub_category(message):
+    '''
+    Создаем подкатегорию в категории
+    '''
     if message.text == Answers.add_new:
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
         category = user.Moderator.json_review['category']
-        cat_id = db.get_category(category).category_id
+        cat_id = db.get_category(category_name=category).category_id
         ses.add(SubCategory(category_id=cat_id,
                             sub_category_name=message.text))
         user.Moderator.tg_state = ModStates.choosing_sub_category
 
-    sub_cats = db.get_sub_categories(category)
+    sub_cats = db.get_sub_categories(cat_id=cat_id)
     sub_cats.append(Answers.add_new)
     bot.send_message(message.chat.id,
-                     Answers.done, 
+                     Answers.done,
                      reply_markup=gen_markup(sub_cats))
 
 
@@ -303,11 +336,11 @@ def send_pics_to_mods():
     while True:
         with db.get_session() as ses:
             avail_mods = ses.query(User, Moderator).\
-                         join(User, User.user_id==Moderator.user_id).\
+                         join(User, User.user_id == Moderator.user_id).\
                          filter(Moderator.tg_state == ModStates.available)
             for user in avail_mods:
-                # TODO body can crash with stream indicated EOF
-                body = json.loads(rmq.get_message(1).decode())
+                body = rmq.get_message(1, queue_name='check_out').decode()
+                body = json.loads(body)
                 text = ("Новая пикча!\n"
                         f"Разрешение - {body['width']}x{body['height']}\n"
                         f"Сервис - {body['service']}\n"
@@ -319,6 +352,7 @@ def send_pics_to_mods():
                 user.Moderator.tg_state = ModStates.got_picture
                 user.Moderator.last_message = message.message_id
                 user.Moderator.json_review = body
+        rmq.connection.process_data_events()
         sleep(3)
 
 def main(pics=False, updates=False):
