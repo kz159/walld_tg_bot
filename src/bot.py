@@ -4,20 +4,21 @@ Main bot module
 import json
 from threading import Thread
 from time import sleep
+import logging
 
 import telebot
-from walld_db.helpers import (DB, Rmq, gen_inline_markup, gen_markup,
-                              prepare_json_review)
+from walld_db.helpers import DB, Rmq
 from walld_db.models import (Admin, AdminStates, Category, Moderator,
-                             ModStates, SubCategory, Tag, User, RejectedPicture)
+                             ModStates, RejectedPicture, SubCategory, Tag,
+                             User)
 
 from config import (DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER, RMQ_HOST,
-                    RMQ_PASS, RMQ_PORT, RMQ_USER, TG_TOKEN)
+                    RMQ_PASS, RMQ_PORT, RMQ_USER, TG_TOKEN, log)
+from helpers import gen_inline_markup, gen_markup, prepare_json_review
 from meta import Answers
 
 #logging.basicConfig(level=logging.INFO)
 
-telebot.apihelper.proxy = {'https':'socks5://127.0.0.1:8123'}
 bot = telebot.TeleBot(TG_TOKEN)
 
 rmq = Rmq(host=RMQ_HOST,
@@ -36,7 +37,7 @@ def pass_start(m):
     '''
     this is a stealth bot, we need to ignore start
     '''
-    pass
+    del m
 
 @bot.message_handler(commands=['reset'])
 def reset_user(message):
@@ -180,7 +181,10 @@ def apply_category(message):
         if message.text in db.categories:
             user.Moderator.json_review['category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_sub_category
-            sub_cats = db.get_sub_categories(message.text)
+            category = db.get_category(category_name=message.text, session=ses)
+            sub_cats = list(category.sub_categories)
+            if category.sub_categories:
+                sub_cats = [i.sub_category_name for i in sub_cats]
             sub_cats.append(Answers.add_new)
             bot.send_message(message.chat.id,
                              'Неплохо, далее под_категория',
@@ -207,8 +211,9 @@ def apply_sub_category(message):
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
         cat = user.Moderator.json_review['category']
-
-        if message.text in db.get_sub_categories(cat):
+        category = db.get_category(category_name=cat, session=ses)
+        sub_cats = [i.sub_category_name for i in category.sub_categories]
+        if message.text in sub_cats:
             user.Moderator.json_review['sub_category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_tags
             tags = db.named_tags
@@ -299,12 +304,13 @@ def create_sub_category(message):
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
         category = user.Moderator.json_review['category']
-        cat_id = db.get_category(category_name=category).category_id
-        ses.add(SubCategory(category_id=cat_id,
+        category = db.get_category(category_name=category, session=ses)
+        ses.add(SubCategory(category_id=category.category_id,
                             sub_category_name=message.text))
         user.Moderator.tg_state = ModStates.choosing_sub_category
 
-    sub_cats = db.get_sub_categories(cat_id=cat_id)
+    sub_cats = [i.sub_category_name for i in category.sub_categories]
+    sub_cats.append(message.text)
     sub_cats.append(Answers.add_new)
     bot.send_message(message.chat.id,
                      Answers.done,

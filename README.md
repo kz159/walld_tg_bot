@@ -7,6 +7,7 @@ accepting/rejecting new pics
 
 
 # TODO
+- bot -> main.py
 - dockerize
 - polling -> web server
 
