@@ -359,7 +359,7 @@ def send_pics_to_mods():
                 user.Moderator.last_message = message.message_id
                 user.Moderator.json_review = body
         rmq.connection.process_data_events()
-        sleep(3)
+        sleep(1.5)
 
 def main(pics=False, updates=False):
     """
