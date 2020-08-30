@@ -1,3 +1,2 @@
-aiohttp==3.6.2
 pyTelegramBotAPI==3.6.7
-https://github.com/kz159/WalldDataBase@master
+git+https://github.com/kz159/WalldDataBase@master

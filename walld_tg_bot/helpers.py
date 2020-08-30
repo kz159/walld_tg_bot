@@ -1,8 +1,7 @@
 
 from random import choice
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
-from telebot import types
-
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+import re
 
 def gen_answers(answer: bool) -> str:
     if answer:
@@ -21,12 +20,12 @@ def gen_inline_markup(cb_yes='cb_yes', cb_no='cb_no'):
     return markup
 
 def gen_markup(stuff=None):
-    markup = types.ReplyKeyboardMarkup()
+    markup = ReplyKeyboardMarkup()
     if stuff:
         for i in stuff:
             markup.row(i)
     else: 
-        markup = types.ReplyKeyboardRemove()
+        markup = ReplyKeyboardRemove()
     return markup
 
 def prepare_json_review(body):
@@ -37,3 +36,12 @@ def prepare_json_review(body):
             f'Под категория - {body["sub_category"]}\n'
             f'Тэги - {body["tags"]}')
     return text
+
+def has_cyrillic(text) -> bool:
+    '''
+    Checks given text for cyrillic
+    We need that function bc nginx cant handle russian good
+    '''
+    return bool(re.search('[\u0400-\u04FF]', text))
+
+# https://stackoverflow.com/questions/48255244/python-check-if-a-string-contains-cyrillic-characters

@@ -4,7 +4,6 @@ Main bot module
 import json
 from threading import Thread
 from time import sleep
-import logging
 
 import telebot
 from walld_db.helpers import DB, Rmq
@@ -14,7 +13,7 @@ from walld_db.models import (Admin, AdminStates, Category, Moderator,
 
 from config import (DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER, RMQ_HOST,
                     RMQ_PASS, RMQ_PORT, RMQ_USER, TG_TOKEN, log)
-from helpers import gen_inline_markup, gen_markup, prepare_json_review
+from helpers import gen_inline_markup, gen_markup, prepare_json_review, has_cyrillic
 from meta import Answers
 
 #logging.basicConfig(level=logging.INFO)
@@ -31,6 +30,7 @@ db = DB(user=DB_USER,
         host=DB_HOST,
         port=DB_PORT,
         name=DB_NAME)
+
 
 @bot.message_handler(commands=['start'])
 def pass_start(m):
@@ -107,6 +107,7 @@ def do_stuff(call):
                              reply_markup=gen_markup())
             dude.Moderator.tg_state = ModStates.available
 
+
 @bot.message_handler(commands=['reg'])
 def cmd_reg(message):
     """
@@ -130,6 +131,7 @@ def cmd_reg(message):
         else:
             bot.send_message(message.chat.id, 'Already!')
 
+
 @bot.message_handler(commands=['raise_user'])
 def raise_user(message):
     """
@@ -141,13 +143,14 @@ def raise_user(message):
     with db.get_session() as ses:
         dude = ses.query(User, Admin).\
                filter(User.telegram_id == message.chat.id,
-                      User.user_id == Admin.user_id).one()
+                      User.user_id == Admin.user_id).one_or_none()
         if dude:
             dudes = db.users
             bot.send_message(message.chat.id,
                              'which one?',
                              reply_markup=gen_markup(dudes))
             dude.Admin.tg_state = AdminStates.raising_user
+
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Admin) == AdminStates.raising_user)
 def raise_user_step_two(message):
@@ -164,6 +167,7 @@ def raise_user_step_two(message):
         admin = ses.query(User, Admin).\
                 filter_by(telegram_id=message.chat.id).one()
         admin.Admin.tg_state = AdminStates.available
+
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.choosing_category)
 def apply_category(message):
@@ -201,6 +205,7 @@ def apply_category(message):
                                                'подбора категории, кнопки '
                                                'доступны в клавиатуре'))
 
+
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.choosing_sub_category)
 def apply_sub_category(message):
     """
@@ -233,6 +238,7 @@ def apply_sub_category(message):
             bot.send_message(message.chat.id, ('Ты находишься в состоянии '
                                                'подбора подкатегории, кнопки '
                                                'доступны в клавиатуре'))
+
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.choosing_tags)
 def choose_tag(message):
@@ -277,11 +283,16 @@ def choose_tag(message):
         else:
             bot.send_message(message.chat.id, 'Ты подбираешь тэги, если что')
 
+
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_tags)
 def create_tag(message):
-    if (message.text == Answers.add_new or message.text == Answers.ok):
+    if (message.text == Answers.add_new
+            or message.text == Answers.ok
+            or has_cyrillic(message.text)
+            or ' ' in message.text):
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
+
     with db.get_session() as ses:
         ses.add(Tag(tag_name=message.text))
         user = db.get_moderator(message.chat.id, session=ses)
@@ -293,14 +304,19 @@ def create_tag(message):
                      Answers.done,
                      reply_markup=gen_markup(tags))
 
+
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_sub_category)
 def create_sub_category(message):
     '''
     Создаем подкатегорию в категории
     '''
-    if message.text == Answers.add_new:
+    if (message.text == Answers.add_new
+            or message.text == Answers.ok
+            or has_cyrillic(message.text)
+            or ' ' in message.text):
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
+
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
         category = user.Moderator.json_review['category']
@@ -319,7 +335,10 @@ def create_sub_category(message):
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_category)
 def create_category(message):
-    if message.text == Answers.add_new:
+    if (message.text == Answers.add_new
+            or message.text == Answers.ok
+            or has_cyrillic(message.text)
+            or ' ' in message.text):
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
 
@@ -333,6 +352,7 @@ def create_category(message):
     bot.send_message(user.User.telegram_id,
                      Answers.done,
                      reply_markup=gen_markup(categories))
+
 
 def send_pics_to_mods():
     """
@@ -361,6 +381,7 @@ def send_pics_to_mods():
         rmq.connection.process_data_events()
         sleep(1.5)
 
+
 def main(pics=False, updates=False):
     """
     Main function that starts all threads
@@ -373,6 +394,7 @@ def main(pics=False, updates=False):
         send_pics.start()
     if updates:
         pol_updates.start()
+
 
 if __name__ == '__main__':
     main(pics=True, updates=True)
