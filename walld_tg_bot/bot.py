@@ -16,7 +16,7 @@ from config import (DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER, RMQ_HOST,
 from helpers import gen_inline_markup, gen_markup, prepare_json_review, has_cyrillic
 from meta import Answers
 
-#logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
 bot = telebot.TeleBot(TG_TOKEN)
 
@@ -34,16 +34,17 @@ db = DB(user=DB_USER,
 
 @bot.message_handler(commands=['start'])
 def pass_start(m):
-    '''
+    """
     this is a stealth bot, we need to ignore start
-    '''
-    del m
+    """
+    pass
+
 
 @bot.message_handler(commands=['reset'])
 def reset_user(message):
-    '''
+    """
     Reset mod state to available
-    '''
+    """
     with db.get_session() as ses:
         user = ses.query(User, Moderator).join(Moderator).\
                filter(User.telegram_id == message.chat.id).one()
@@ -59,31 +60,27 @@ def do_stuff(call):
     Эта функция обрабатывает нажим кнопок
     По сути 2 шаг по обработке картинки
     """
-    with db.get_session() as ses:
-        dude = ses.query(User, Moderator).\
-               filter(Moderator.user_id == User.user_id,
-                      User.telegram_id == call.from_user.id)
+    with db.get_session() as ses:  # TODO long session
+        dude = ses.query(User, Moderator).filter(Moderator.id == User.id, User.telegram_id == call.from_user.id)
         dude = dude.one_or_none()
+
         if not dude:
             return
 
         pic_json = dude.Moderator.json_review
         last_message = dude.Moderator.last_message
 
-        if (call.data == 'cb_yes' or call.data == 'done_no'):
+        if call.data == 'cb_yes' or call.data == 'done_no':
             dude.Moderator.tg_state = ModStates.choosing_category
+
             bot.answer_callback_query(call.id, "Погнали")
             categories = db.categories
             categories.append('Добавить новую...')
-            bot.edit_message_reply_markup(dude.User.telegram_id,
-                                          message_id=last_message)
-            bot.send_message(call.from_user.id,
-                             'Категория!',
-                             reply_markup=gen_markup(categories))
+            bot.edit_message_reply_markup(dude.User.telegram_id, message_id=last_message)
+            bot.send_message(call.from_user.id, 'Категория!', reply_markup=gen_markup(categories))
 
         elif call.data == 'cb_no':
-            bot.edit_message_reply_markup(dude.User.telegram_id,
-                                          message_id=last_message)
+            bot.edit_message_reply_markup(dude.User.telegram_id, message_id=last_message)
             bot.answer_callback_query(call.id, "Забываем про пикчу")
             dude.Moderator.tg_state = ModStates.available
 
@@ -93,19 +90,20 @@ def do_stuff(call):
             ses.add(rejected_pic)
 
         elif call.data == 'done_yes':
-            bot.edit_message_reply_markup(dude.User.telegram_id,
-                                          message_id=last_message)
+            bot.edit_message_reply_markup(dude.User.telegram_id, message_id=last_message)
             bot.answer_callback_query(call.id, "Спасибо! Бросил на обработку")
-            dude.Moderator.pics_accepted += 1
-            pic_json['mod_review_id'] = dude.User.user_id
+
             rmq.channel.basic_publish(exchange='',
                                       routing_key='go_sql',
                                       properties=rmq.durable,
                                       body=json.dumps(pic_json))
-            bot.send_message(call.from_user.id,
-                             'ok',
-                             reply_markup=gen_markup())
+
+            pic_json['mod_review_id'] = dude.User.user_id
+
+            dude.Moderator.pics_accepted += 1
             dude.Moderator.tg_state = ModStates.available
+
+            bot.send_message(call.from_user.id, 'ok', reply_markup=gen_markup())
 
 
 @bot.message_handler(commands=['reg'])
@@ -116,18 +114,20 @@ def cmd_reg(message):
     делает его админом
     """
     with db.get_session() as ses:
-        is_there_admins = ses.query(Admin).one_or_none()
-        dude = ses.query(User).\
-               filter_by(telegram_id=message.chat.id).one_or_none()
+        admin_presented = ses.query(Admin).one_or_none()
+        dude = ses.query(User).filter_by(telegram_id=message.chat.id).one_or_none()
+
         if not dude:
             nick = message.chat.username or 'No_nickname'
-            dude = User(nickname=nick,
-                        telegram_id=message.chat.id)
+            dude = User(name=nick, telegram_id=message.chat.id)
             ses.add(dude)
             ses.commit()
             bot.send_message(message.chat.id, 'Regged!')
-            if not is_there_admins:
-                ses.add(Admin(user_id=dude.user_id))
+
+            if not admin_presented:
+                ses.add(Admin(user_id=dude.id))
+                ses.add(Moderator(user_id=dude.id))
+
         else:
             bot.send_message(message.chat.id, 'Already!')
 
@@ -141,32 +141,32 @@ def raise_user(message):
     выдаем клавиатуру со всеми известными юзерами
     """
     with db.get_session() as ses:
-        dude = ses.query(User, Admin).\
-               filter(User.telegram_id == message.chat.id,
-                      User.user_id == Admin.user_id).one_or_none()
+        dude = ses.query(User,
+                         Admin).filter(User.telegram_id == message.chat.id, User.id == Admin.user_id).one_or_none()
         if dude:
             dudes = db.users
-            bot.send_message(message.chat.id,
-                             'which one?',
-                             reply_markup=gen_markup(dudes))
+            bot.send_message(message.chat.id, 'which one?', reply_markup=gen_markup(dudes))
+
             dude.Admin.tg_state = AdminStates.raising_user
 
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Admin) == AdminStates.raising_user)
 def raise_user_step_two(message):
-    """
+    """`
     Обработка второго шага повышение привелегий юзера
     """
     with db.get_session() as ses:
         user = ses.query(User).filter_by(nickname=message.text).one()
+
         if user:
-            ses.add(Moderator(user_id=user.user_id))
+            ses.add(Moderator(user_id=user.id))
             bot.send_message(message.chat.id, Answers.ok)
+
+            admin = ses.query(User, Admin).filter_by(telegram_id=message.chat.id).one()
+            admin.Admin.tg_state = AdminStates.available
+
         else:
             bot.send_message(message.chat.id, 'not found user')
-        admin = ses.query(User, Admin).\
-                filter_by(telegram_id=message.chat.id).one()
-        admin.Admin.tg_state = AdminStates.available
 
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.choosing_category)
@@ -177,22 +177,21 @@ def apply_category(message):
     выдаем 4 стадию если желаемая категория существует
     """
     with db.get_session() as ses:
-        # TODO Очень много with session,
-        # мб есть прикол чтоб запихнуть это в декоратор?
-        user = ses.query(User, Moderator).\
-               join(Moderator, User.user_id == Moderator.user_id).\
-               filter(User.telegram_id == message.chat.id).one()
+        query = ses.query(User, Moderator).join(Moderator, User.id == Moderator.user_id)
+        user = query.filter(User.telegram_id == message.chat.id).one()
+
         if message.text in db.categories:
             user.Moderator.json_review['category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_sub_category
             category = db.get_category(category_name=message.text, session=ses)
             sub_cats = list(category.sub_categories)
+
             if category.sub_categories:
                 sub_cats = [i.sub_category_name for i in sub_cats]
+
             sub_cats.append(Answers.add_new)
-            bot.send_message(message.chat.id,
-                             'Неплохо, далее под_категория',
-                             reply_markup=gen_markup(sub_cats))
+
+            bot.send_message(message.chat.id, 'Неплохо, далее под_категория', reply_markup=gen_markup(sub_cats))
 
         elif message.text == Answers.add_new:
             user.Moderator.tg_state = ModStates.making_category
@@ -244,7 +243,6 @@ def apply_sub_category(message):
 def choose_tag(message):
     """
     Выбираем тэги тут
-    TODO Сделать эмодзи выбранного тэга
     """
 
     with db.get_session() as ses:
@@ -284,36 +282,39 @@ def choose_tag(message):
             bot.send_message(message.chat.id, 'Ты подбираешь тэги, если что')
 
 
+def has_cyrillic_or_space(message: str):  # TODO bad naming
+    if has_cyrillic(message) or ' ' in message:
+        return True
+    return False
+
+# TODO decorator?
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_tags)
 def create_tag(message):
-    if (message.text == Answers.add_new
-            or message.text == Answers.ok
-            or has_cyrillic(message.text)
-            or ' ' in message.text):
+    text = message.text
+
+    if text in [Answers.ok, Answers.add_new] or has_cyrillic_or_space(text):
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
 
     with db.get_session() as ses:
-        ses.add(Tag(tag_name=message.text))
+        ses.add(Tag(name=text))
         user = db.get_moderator(message.chat.id, session=ses)
         user.Moderator.tg_state = ModStates.choosing_tags
+
     tags = db.named_tags
     tags.append(Answers.add_new)
     tags.append(Answers.ok)
-    bot.send_message(user.User.telegram_id,
-                     Answers.done,
-                     reply_markup=gen_markup(tags))
+
+    bot.send_message(user.User.telegram_id, Answers.done, reply_markup=gen_markup(tags))
 
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_sub_category)
 def create_sub_category(message):
-    '''
+    """
     Создаем подкатегорию в категории
-    '''
-    if (message.text == Answers.add_new
-            or message.text == Answers.ok
-            or has_cyrillic(message.text)
-            or ' ' in message.text):
+    """
+    text = message.text
+    if text in [Answers.add_new, Answers.ok] or has_cyrillic_or_space(text):
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
 
@@ -321,37 +322,33 @@ def create_sub_category(message):
         user = db.get_moderator(message.chat.id, session=ses)
         category = user.Moderator.json_review['category']
         category = db.get_category(category_name=category, session=ses)
-        ses.add(SubCategory(category_id=category.category_id,
-                            sub_category_name=message.text))
+        ses.add(SubCategory(id=category.id, name=text))
         user.Moderator.tg_state = ModStates.choosing_sub_category
 
     sub_cats = [i.sub_category_name for i in category.sub_categories]
-    sub_cats.append(message.text)
+    sub_cats.append(text)
     sub_cats.append(Answers.add_new)
-    bot.send_message(message.chat.id,
-                     Answers.done,
-                     reply_markup=gen_markup(sub_cats))
+
+    bot.send_message(message.chat.id, Answers.done, reply_markup=gen_markup(sub_cats))
 
 
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_category)
 def create_category(message):
-    if (message.text == Answers.add_new
-            or message.text == Answers.ok
-            or has_cyrillic(message.text)
-            or ' ' in message.text):
+    text = message.text
+
+    if text in [Answers.add_new, Answers.ok] or has_cyrillic_or_space(text):
         bot.send_message(message.chat.id, 'Не ошибся ли?')
         return
 
     with db.get_session() as ses:
-        ses.add(Category(category_name=message.text))
+        ses.add(Category(name=text))
         user = db.get_moderator(message.chat.id, session=ses)
         user.Moderator.tg_state = ModStates.choosing_category
 
     categories = db.categories
     categories.append(Answers.add_new)
-    bot.send_message(user.User.telegram_id,
-                     Answers.done,
-                     reply_markup=gen_markup(categories))
+
+    bot.send_message(user.User.telegram_id, Answers.done, reply_markup=gen_markup(categories))
 
 
 def send_pics_to_mods():
@@ -361,10 +358,10 @@ def send_pics_to_mods():
     """
     while True:
         with db.get_session() as ses:
-            avail_mods = ses.query(User, Moderator).\
-                         join(User, User.user_id == Moderator.user_id).\
-                         filter(Moderator.tg_state == ModStates.available)
-            for user in avail_mods:
+            mods = ses.query(User, Moderator).join(User, User.id == Moderator.user_id)
+            avail_mods = mods.filter(Moderator.tg_state == ModStates.available)
+
+            for mod in avail_mods:
                 body = rmq.get_message(1, queue_name='check_out').decode()
                 body = json.loads(body)
                 text = ("Новая пикча!\n"
@@ -372,12 +369,13 @@ def send_pics_to_mods():
                         f"Сервис - {body['service']}\n"
                         f'Превью - \n{body["preview_url"]}\n'
                         f'Оригинал - \n{body["download_url"]}\n')
-                message = bot.send_message(user.User.telegram_id,
-                                           text,
-                                           reply_markup=gen_inline_markup())
-                user.Moderator.tg_state = ModStates.got_picture
-                user.Moderator.last_message = message.message_id
-                user.Moderator.json_review = body
+
+                message = bot.send_message(mod.User.telegram_id, text, reply_markup=gen_inline_markup())
+
+                mod.Moderator.tg_state = ModStates.got_picture
+                mod.Moderator.last_message = message.message_id
+                mod.Moderator.json_review = body
+
         rmq.connection.process_data_events()
         sleep(1.5)
 
@@ -390,6 +388,7 @@ def main(pics=False, updates=False):
     """
     pol_updates = Thread(target=bot.polling)
     send_pics = Thread(target=send_pics_to_mods)
+
     if pics:
         send_pics.start()
     if updates:

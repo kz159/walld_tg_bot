@@ -1,25 +1,19 @@
-import requests
+from dataclasses import dataclass
+from typing import List, Optional
 
-class AttrDisplay:
-    def gatherAttrs(self):
-        attrs = []
-        for key in sorted(self.__dict__):
-            attrs.append('%s=%s' % (key, getattr(self, key)))
-        return ', '.join(attrs)
-    
-    def __repr__(self):
-        return '[%s: %s]' % (self.__class__.__name__, self.gatherAttrs())
+# TODO move this file into walld_utils
 
-class Picture(AttrDisplay):
-    def __init__(self, service, source, author, height, width, url, id):
-        self.id = id
-        self.service = service
-        self.source = source
-        self.author = author
-        self.height = height
-        self.width = width
-        self.url = url
-        self.colours = None
+
+@dataclass
+class Picture:
+    id: int
+    service: str
+    source: str
+    author: str
+    height: str
+    width: str
+    url: str
+    colours: Optional[List[bytes]]  # TODO DO WE NEED THIS?
 
     @classmethod
     def from_pexel(cls, pexel):
@@ -30,9 +24,3 @@ class Picture(AttrDisplay):
                    width=pexel.width,
                    url=pexel.src['original'],
                    id=pexel.id)
-
-    def download(self):
-        pass
-
-    def calc_colour(self):
-        pass
