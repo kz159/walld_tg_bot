@@ -98,7 +98,7 @@ def do_stuff(call):
                                       properties=rmq.durable,
                                       body=json.dumps(pic_json))
 
-            pic_json['mod_review_id'] = dude.User.user_id
+            pic_json['mod_review_id'] = dude.User.id
 
             dude.Moderator.pics_accepted += 1
             dude.Moderator.tg_state = ModStates.available
@@ -183,11 +183,11 @@ def apply_category(message):
         if message.text in db.categories:
             user.Moderator.json_review['category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_sub_category
-            category = db.get_category(category_name=message.text, session=ses)
+            category = db.get_row(Category, session=ses, name=message.text)
             sub_cats = list(category.sub_categories)
 
             if category.sub_categories:
-                sub_cats = [i.sub_category_name for i in sub_cats]
+                sub_cats = [i.name for i in sub_cats]
 
             sub_cats.append(Answers.add_new)
 
@@ -215,17 +215,18 @@ def apply_sub_category(message):
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
         cat = user.Moderator.json_review['category']
-        category = db.get_category(category_name=cat, session=ses)
-        sub_cats = [i.sub_category_name for i in category.sub_categories]
+        category = db.get_row(Category, session=ses, name=cat)
+        sub_cats = [i.name for i in category.sub_categories]
+
         if message.text in sub_cats:
             user.Moderator.json_review['sub_category'] = message.text
             user.Moderator.tg_state = ModStates.choosing_tags
+
             tags = db.named_tags
             tags.append(Answers.add_new)
             tags.append(Answers.ok)
-            bot.send_message(message.chat.id,
-                             'Тэги!',
-                             reply_markup=gen_markup(tags))
+
+            bot.send_message(message.chat.id, 'Тэги!', reply_markup=gen_markup(tags))
 
         elif message.text == Answers.add_new:
             user.Moderator.tg_state = ModStates.making_sub_category
@@ -247,34 +248,33 @@ def choose_tag(message):
 
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
-        tag = db.get_tag(tag_name=message.text, session=ses)
+        tag = db.get_row(Tag, session=ses, name=message.text)
+        text = message.text
 
         if not user.Moderator.json_review.get('tags'):
             user.Moderator.json_review['tags'] = []
         pic_tags = user.Moderator.json_review['tags']
 
-        if message.text == Answers.ok:
+        if text == Answers.ok:
             body = prepare_json_review(user.Moderator.json_review)
-            r_markup = gen_inline_markup(cb_yes='done_yes',
-                                         cb_no='done_no')
-            review = bot.send_message(message.chat.id,
-                                      body,
-                                      reply_markup=r_markup)
+            r_markup = gen_inline_markup(cb_yes='done_yes', cb_no='done_no')
+
+            review = bot.send_message(message.chat.id, body, reply_markup=r_markup)
             user.Moderator.last_message = review.message_id
 
-        elif message.text == Answers.add_new:
+        elif text == Answers.add_new:
             bot.send_message(message.chat.id,
                              "Добавим новый тэг, введи название",
                              reply_markup=gen_markup())
             user.Moderator.tg_state = ModStates.making_tags
 
-        elif (message.text in db.named_tags and tag.tag_name not in pic_tags):
-            pic_tags.append(tag.tag_name)
+        elif text in db.named_tags and tag.name not in pic_tags:
+            pic_tags.append(tag.name)
             user.Moderator.json_review['tags'] = pic_tags
             bot.send_message(message.chat.id, Answers.ok)
 
-        elif tag is not None and tag.tag_name in pic_tags:
-            pic_tags.remove(tag.tag_name)
+        elif tag is not None and tag.name in pic_tags:
+            pic_tags.remove(tag.name)
             user.Moderator.json_review['tags'] = pic_tags
             bot.send_message(message.chat.id, Answers.deleted)
 
@@ -286,6 +286,7 @@ def has_cyrillic_or_space(message: str):  # TODO bad naming
     if has_cyrillic(message) or ' ' in message:
         return True
     return False
+
 
 # TODO decorator?
 @bot.message_handler(func=lambda m: db.get_state(m.chat.id, Moderator) == ModStates.making_tags)
@@ -321,11 +322,12 @@ def create_sub_category(message):
     with db.get_session() as ses:
         user = db.get_moderator(message.chat.id, session=ses)
         category = user.Moderator.json_review['category']
-        category = db.get_category(category_name=category, session=ses)
-        ses.add(SubCategory(id=category.id, name=text))
+
+        category = db.get_row(Category, session=ses, name=category)
+        ses.add(SubCategory(category_id=category.id, name=text))
         user.Moderator.tg_state = ModStates.choosing_sub_category
 
-    sub_cats = [i.sub_category_name for i in category.sub_categories]
+    sub_cats = [i.name for i in category.sub_categories]
     sub_cats.append(text)
     sub_cats.append(Answers.add_new)
 
