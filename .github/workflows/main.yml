@@ -10,33 +10,39 @@ on:
     types: [dev-db-updated]
 
 env:
-  IMAGE_NAME: walld_tg_bot
-  EVENT: github.event_name
-
+  IMAGE_NAME: walld_aku_aku
+  EVENT: ${{ github.event_name }}
+  REF: ${{ github.ref }}
 
 jobs:
   push:
-
     runs-on: ubuntu-latest
-
-
     steps:
       - uses: actions/checkout@v2
+        if: github.event_name == 'repository_dispatch'
+        with:
+          ref: refs/heads/dev
+
+      - uses: actions/checkout@v2
+        if: github.event_name == 'push'
+        with:
+          ref: ${{ github.ref }}
 
       - name: Build image
         run: |
-          echo ${{ github.ref }}
           docker build . --file Dockerfile --tag $IMAGE_NAME
+          
       - name: Log into registry
-        
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u kz159 --password-stdin
 
       - name: Push image
         run: |
+          VERSION=$(echo $REF | sed -e 's,.*/\(.*\),\1,')
           IMAGE_ID=kz159/$IMAGE_NAME
+          echo VERSION $VERSION
+          
           # Change all uppercase to lowercase
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
           
           if [ "$EVENT" = "repository_dispatch" ]
           then
@@ -47,6 +53,7 @@ jobs:
           else
             VERSION='latest'
           fi
+          
           echo IMAGE_ID=$IMAGE_ID
           echo VERSION=$VERSION
           
