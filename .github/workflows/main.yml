@@ -10,7 +10,7 @@ on:
     types: [dev-db-updated]
 
 env:
-  IMAGE_NAME: walld_aku_aku
+  IMAGE_NAME: walld_tg_bot
   EVENT: ${{ github.event_name }}
   REF: ${{ github.ref }}
 
