@@ -20,16 +20,8 @@ from meta import Answers
 
 bot = telebot.TeleBot(TG_TOKEN)
 
-rmq = Rmq(host=RMQ_HOST,
-          port=RMQ_PORT,
-          user=RMQ_USER,
-          passw=RMQ_PASS)
-
-db = DB(user=DB_USER,
-        passwd=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT,
-        name=DB_NAME)
+rmq = Rmq(host=RMQ_HOST, port=RMQ_PORT, user=RMQ_USER, passw=RMQ_PASS)
+db = DB(user=DB_USER, passwd=DB_PASSWORD, host=DB_HOST, port=DB_PORT, name=DB_NAME)
 
 
 @bot.message_handler(commands=['start'])
