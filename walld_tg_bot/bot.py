@@ -76,7 +76,7 @@ def do_stuff(call):
             bot.answer_callback_query(call.id, "Забываем про пикчу")
             dude.Moderator.tg_state = ModStates.available
 
-            rejected_pic = RejectedPicture(mod_id=dude.Moderator.mod_id,
+            rejected_pic = RejectedPicture(mod_id=dude.Moderator.id,
                                            uploader='Pexels crawler',
                                            url=pic_json['download_url'])
             ses.add(rejected_pic)
