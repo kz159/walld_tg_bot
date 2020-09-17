@@ -20,6 +20,10 @@ from meta import Answers
 
 bot = telebot.TeleBot(TG_TOKEN)
 
+# TODO make server and polling method
+
+bot.delete_webhook()
+
 rmq = Rmq(host=RMQ_HOST, port=RMQ_PORT, user=RMQ_USER, passw=RMQ_PASS)
 db = DB(user=DB_USER, passwd=DB_PASSWORD, host=DB_HOST, port=DB_PORT, name=DB_NAME)
 
@@ -76,7 +80,7 @@ def do_stuff(call):
             bot.answer_callback_query(call.id, "Забываем про пикчу")
             dude.Moderator.tg_state = ModStates.available
 
-            rejected_pic = RejectedPicture(mod_id=dude.Moderator.mod_id,
+            rejected_pic = RejectedPicture(mod_id=dude.Moderator.id,
                                            uploader='Pexels crawler',
                                            url=pic_json['download_url'])
             ses.add(rejected_pic)
